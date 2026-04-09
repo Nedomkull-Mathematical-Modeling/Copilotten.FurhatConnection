@@ -2,23 +2,24 @@
 Copilotten Furhat Bridge
 ========================
 FastAPI WebSocket server that bridges:
-  - A browser/frontend (microphone audio via WebSocket)
-  - OpenAI Realtime API (speech-to-text + LLM response)
-  - Furhat robot (text-to-speech via WebSocket)
+  - A browser/frontend (monitor UI via WebSocket)
+  - OpenAI Realtime API (speech-to-text + LLM + TTS via WebSocket)
+  - Furhat robot (microphone input + audio output via furhat-realtime-api)
 
 Flow:
   1. Frontend sends config (Furhat IP + OpenAI API key)
-  2. Server opens WebSocket connections to both Furhat and OpenAI
-  3. Microphone audio (PCM16 @ 24 kHz) is streamed to OpenAI
-  4. On response.done, the assistant text is sent to the Furhat robot
-     via request.speak.text so the robot reads it aloud
+  2. Server connects to Furhat via AsyncFurhatClient and to OpenAI via WebSocket
+  3. On session.created, the session is configured and OpenAI generates a greeting
+  4. Furhat microphone audio (PCM16 @ 24 kHz) is streamed to OpenAI
+  5. OpenAI audio deltas are streamed back to Furhat for real-time playback
+  6. When Furhat finishes speaking the robot resumes listening
+  7. Transcripts are forwarded to the browser UI
 
 Run with:
     uvicorn main:app --reload
 """
 
 import asyncio
-import base64
 import json
 import logging
 
@@ -27,6 +28,7 @@ import websockets.exceptions
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from furhat_realtime_api import AsyncFurhatClient, Events
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -93,9 +95,8 @@ async def run_bridge(
     furhat_ip: str,
     openai_api_key: str,
 ) -> None:
-    """Open connections to Furhat and OpenAI, then bridge messages between all three."""
+    """Connect to Furhat via furhat-realtime-api and OpenAI via WebSocket, then bridge."""
 
-    furhat_uri = f"ws://{furhat_ip}:9000/v1/events"
     openai_headers = {
         "Authorization": f"Bearer {openai_api_key}",
         "OpenAI-Beta": "realtime=v1",
@@ -105,191 +106,218 @@ async def run_bridge(
         {"type": "status", "message": f"Connecting to Furhat at {furhat_ip}…"}
     )
 
+    furhat = AsyncFurhatClient(furhat_ip)
     try:
-        async with websockets.connect(furhat_uri, open_timeout=10) as furhat_ws:
+        await furhat.connect()
+    except Exception as exc:
+        logger.error("Failed to connect to Furhat: %s", exc)
+        try:
+            await client_ws.send_json(
+                {"type": "error", "message": f"Could not connect to Furhat: {exc}"}
+            )
+        except Exception:
+            pass
+        return
+
+    try:
+        await client_ws.send_json(
+            {
+                "type": "status",
+                "message": "Connected to Furhat. Connecting to OpenAI…",
+            }
+        )
+
+        async with websockets.connect(
+            OPENAI_REALTIME_URI,
+            additional_headers=openai_headers,
+            open_timeout=15,
+        ) as openai_ws:
             await client_ws.send_json(
                 {
                     "type": "status",
-                    "message": "Connected to Furhat. Connecting to OpenAI…",
+                    "message": "Connected to OpenAI. Starting session…",
                 }
             )
 
-            async with websockets.connect(
-                OPENAI_REALTIME_URI,
-                additional_headers=openai_headers,
-                open_timeout=15,
-            ) as openai_ws:
-                await client_ws.send_json(
-                    {
-                        "type": "status",
-                        "message": "Connected to OpenAI. Configuring session…",
-                    }
-                )
+            stop = asyncio.Event()
+            output_started = False
 
-                # Configure the Realtime session: audio in, text out, server VAD
-                await openai_ws.send(
-                    json.dumps(
-                        {
-                            "type": "session.update",
-                            "session": {
-                                "modalities": ["text"],
-                                "instructions": SYSTEM_INSTRUCTIONS,
-                                "input_audio_format": "pcm16",
-                                "input_audio_transcription": {"model": "whisper-1"},
-                                "turn_detection": {
-                                    "type": "server_vad",
-                                    "threshold": 0.5,
-                                    "prefix_padding_ms": 300,
-                                    "silence_duration_ms": 700,
-                                },
-                            },
-                        }
-                    )
-                )
+            # ── Furhat event handlers ─────────────────────────────────────
 
-                await client_ws.send_json({"type": "connected"})
-                logger.info("Bridge session started (Furhat: %s)", furhat_ip)
-
-                stop = asyncio.Event()
-
-                async def handle_openai_messages() -> None:
+            async def on_furhat_audio(data: dict) -> None:
+                """Forward Furhat microphone audio to OpenAI."""
+                audio = data.get("microphone")
+                if audio:
                     try:
-                        async for raw in openai_ws:
-                            event = json.loads(raw)
-                            etype = event.get("type", "")
-                            logger.debug("OpenAI → %s", etype)
-
-                            if etype == "input_audio_buffer.speech_started":
-                                await client_ws.send_json({"type": "vad_speech_started"})
-
-                            elif etype == "input_audio_buffer.speech_stopped":
-                                await client_ws.send_json({"type": "vad_speech_stopped"})
-
-                            elif etype == "conversation.item.input_audio_transcription.completed":
-                                transcript = event.get("transcript", "")
-                                if transcript:
-                                    await client_ws.send_json(
-                                        {
-                                            "type": "transcript",
-                                            "role": "user",
-                                            "text": transcript,
-                                        }
-                                    )
-
-                            elif etype == "response.text.delta":
-                                await client_ws.send_json(
-                                    {
-                                        "type": "transcript_delta",
-                                        "role": "assistant",
-                                        "delta": event.get("delta", ""),
-                                    }
-                                )
-
-                            elif etype == "response.done":
-                                text = _extract_text(event.get("response", {}))
-                                if text:
-                                    await client_ws.send_json(
-                                        {
-                                            "type": "transcript",
-                                            "role": "assistant",
-                                            "text": text,
-                                        }
-                                    )
-                                    await furhat_ws.send(
-                                        json.dumps(
-                                            {
-                                                "event_name": "request.speak.text",
-                                                "text": text,
-                                                "abort": True,
-                                            }
-                                        )
-                                    )
-                                    logger.info("Sent to Furhat: %.80s", text)
-
-                            elif etype == "error":
-                                err = event.get("error", {})
-                                await client_ws.send_json(
-                                    {
-                                        "type": "error",
-                                        "message": err.get("message", "Unknown OpenAI error"),
-                                    }
-                                )
-                    except websockets.exceptions.ConnectionClosed:
-                        pass
-                    finally:
-                        stop.set()
-
-                async def handle_furhat_messages() -> None:
-                    try:
-                        async for raw in furhat_ws:
-                            event = json.loads(raw)
-                            ename = event.get("event_name", "")
-                            logger.debug("Furhat → %s", ename)
-                            await client_ws.send_json(
-                                {"type": "furhat_event", "event": event}
+                        await openai_ws.send(
+                            json.dumps(
+                                {
+                                    "type": "input_audio_buffer.append",
+                                    "audio": audio,
+                                }
                             )
+                        )
                     except websockets.exceptions.ConnectionClosed:
                         pass
-                    finally:
-                        stop.set()
 
-                async def handle_client_messages() -> None:
-                    try:
-                        while not stop.is_set():
-                            try:
-                                msg = await client_ws.receive()
-                            except WebSocketDisconnect:
-                                break
+            async def on_furhat_speak_end(data: dict) -> None:
+                """When Furhat finishes speaking, resume listening for the user."""
+                try:
+                    await client_ws.send_json({"type": "furhat_speak_end"})
+                    await furhat.request_audio_start(
+                        sample_rate=24000, microphone=True, speaker=False
+                    )
+                except Exception:
+                    pass
 
-                            if msg.get("type") == "websocket.disconnect":
-                                break
+            furhat.add_handler(Events.response_audio_data, on_furhat_audio)  # microphone audio from Furhat
+            furhat.add_handler(Events.response_speak_end, on_furhat_speak_end)
 
-                            raw_bytes = msg.get("bytes")
-                            raw_text = msg.get("text")
+            # ── OpenAI message handler ────────────────────────────────────
 
-                            if raw_bytes:
-                                # PCM16 audio chunk – forward to OpenAI
-                                audio_b64 = base64.b64encode(raw_bytes).decode()
-                                await openai_ws.send(
-                                    json.dumps(
-                                        {
-                                            "type": "input_audio_buffer.append",
-                                            "audio": audio_b64,
-                                        }
-                                    )
+            async def handle_openai_messages() -> None:
+                nonlocal output_started
+                try:
+                    async for raw in openai_ws:
+                        event = json.loads(raw)
+                        etype = event.get("type", "")
+                        logger.debug("OpenAI → %s", etype)
+
+                        if etype == "session.created":
+                            # Configure session: audio in/out, server VAD
+                            await openai_ws.send(
+                                json.dumps(
+                                    {
+                                        "type": "session.update",
+                                        "session": {
+                                            "modalities": ["text", "audio"],
+                                            "instructions": SYSTEM_INSTRUCTIONS,
+                                            "input_audio_format": "pcm16",
+                                            "output_audio_format": "pcm16",
+                                            "input_audio_transcription": {
+                                                "model": "whisper-1"
+                                            },
+                                            "turn_detection": {
+                                                "type": "server_vad",
+                                                "threshold": 0.5,
+                                                "prefix_padding_ms": 300,
+                                                "silence_duration_ms": 700,
+                                            },
+                                        },
+                                    }
                                 )
-                            elif raw_text:
-                                data = json.loads(raw_text)
-                                if data.get("type") == "commit_audio":
-                                    # Manual commit for push-to-talk mode
-                                    await openai_ws.send(
-                                        json.dumps({"type": "input_audio_buffer.commit"})
-                                    )
-                                    await openai_ws.send(
-                                        json.dumps({"type": "response.create"})
-                                    )
-                    except WebSocketDisconnect:
-                        pass
-                    finally:
-                        stop.set()
+                            )
+                            # Attend to nearest user and start the conversation
+                            await furhat.request_attend_user()
+                            await openai_ws.send(
+                                json.dumps({"type": "response.create"})
+                            )
+                            await client_ws.send_json({"type": "connected"})
+                            logger.info("Bridge session started (Furhat: %s)", furhat_ip)
 
-                tasks = [
-                    asyncio.create_task(handle_openai_messages()),
-                    asyncio.create_task(handle_furhat_messages()),
-                    asyncio.create_task(handle_client_messages()),
-                ]
-                done, pending = await asyncio.wait(
-                    tasks, return_when=asyncio.FIRST_COMPLETED
-                )
-                for task in pending:
-                    task.cancel()
-                for task in done:
-                    exc = task.exception()
-                    if exc and not isinstance(
-                        exc,
-                        (WebSocketDisconnect, websockets.exceptions.ConnectionClosed),
-                    ):
-                        logger.error("Task error: %s", exc, exc_info=exc)
+                        elif etype == "response.created":
+                            # OpenAI is generating – stop the microphone while it speaks
+                            await furhat.request_audio_stop()
+
+                        elif etype == "input_audio_buffer.speech_started":
+                            await client_ws.send_json({"type": "vad_speech_started"})
+
+                        elif etype == "input_audio_buffer.speech_stopped":
+                            await client_ws.send_json({"type": "vad_speech_stopped"})
+
+                        elif etype == "conversation.item.input_audio_transcription.completed":
+                            transcript = event.get("transcript", "")
+                            if transcript:
+                                await client_ws.send_json(
+                                    {
+                                        "type": "transcript",
+                                        "role": "user",
+                                        "text": transcript,
+                                    }
+                                )
+
+                        elif etype == "response.audio.delta":
+                            delta = event.get("delta", "")
+                            if delta:
+                                # output_started is only read/written inside this sequential
+                                # async-for loop, so no lock is needed in asyncio.
+                                if not output_started:
+                                    await furhat.request_speak_audio_start(
+                                        sample_rate=24000, lipsync=True
+                                    )
+                                    output_started = True
+                                await furhat.request_speak_audio_data(delta)
+
+                        elif etype == "response.audio.done":
+                            if output_started:
+                                await furhat.request_speak_audio_end()
+                                output_started = False
+
+                        elif etype == "response.audio_transcript.delta":
+                            await client_ws.send_json(
+                                {
+                                    "type": "transcript_delta",
+                                    "role": "assistant",
+                                    "delta": event.get("delta", ""),
+                                }
+                            )
+
+                        elif etype == "response.audio_transcript.done":
+                            transcript = event.get("transcript", "")
+                            if transcript:
+                                await client_ws.send_json(
+                                    {
+                                        "type": "transcript",
+                                        "role": "assistant",
+                                        "text": transcript,
+                                    }
+                                )
+                                logger.info("Assistant: %.80s", transcript)
+
+                        elif etype == "error":
+                            err = event.get("error", {})
+                            await client_ws.send_json(
+                                {
+                                    "type": "error",
+                                    "message": err.get("message", "Unknown OpenAI error"),
+                                }
+                            )
+                except websockets.exceptions.ConnectionClosed:
+                    pass
+                finally:
+                    stop.set()
+
+            async def handle_client_messages() -> None:
+                """Wait for the browser to disconnect."""
+                try:
+                    while not stop.is_set():
+                        try:
+                            msg = await client_ws.receive()
+                        except WebSocketDisconnect:
+                            break
+                        if msg.get("type") == "websocket.disconnect":
+                            break
+                except WebSocketDisconnect:
+                    pass
+                finally:
+                    stop.set()
+
+            tasks = [
+                asyncio.create_task(handle_openai_messages()),
+                asyncio.create_task(handle_client_messages()),
+            ]
+            done, pending = await asyncio.wait(
+                tasks, return_when=asyncio.FIRST_COMPLETED
+            )
+            for task in pending:
+                task.cancel()
+            for task in done:
+                exc = task.exception()
+                if exc and not isinstance(
+                    exc,
+                    (WebSocketDisconnect, websockets.exceptions.ConnectionClosed),
+                ):
+                    logger.error("Task error: %s", exc, exc_info=exc)
 
     except (OSError, websockets.exceptions.WebSocketException) as exc:
         logger.error("Connection error: %s", exc)
@@ -307,18 +335,13 @@ async def run_bridge(
             )
         except Exception:
             pass
-
-
-def _extract_text(response: dict) -> str:
-    """Extract assistant text from an OpenAI response.done payload."""
-    parts: list[str] = []
-    for item in response.get("output", []):
-        if item.get("type") == "message":
-            for part in item.get("content", []):
-                if part.get("type") == "text":
-                    parts.append(part.get("text", ""))
-                elif part.get("type") == "audio":
-                    transcript = part.get("transcript", "")
-                    if transcript:
-                        parts.append(transcript)
-    return " ".join(p for p in parts if p)
+    finally:
+        try:
+            await furhat.request_audio_stop()
+            await furhat.request_speak_stop()
+        except Exception:
+            pass
+        try:
+            await furhat.disconnect()
+        except Exception:
+            pass

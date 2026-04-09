@@ -191,10 +191,9 @@
     <div id="conversation"></div>
 
     <div id="controls">
-      <button id="mic-btn" disabled title="Toggle microphone">🎤</button>
       <div id="controls-info">
         <div id="vad-status">Waiting for connection…</div>
-        <p>Automatic voice detection. Click 🎤 to mute / unmute.</p>
+        <p>Audio is captured by the Furhat robot's microphone.</p>
       </div>
     </div>
   </div>
@@ -209,7 +208,6 @@ const setupPanel   = document.getElementById('setup-panel');
 const sessionPanel = document.getElementById('session-panel');
 const connectBtn   = document.getElementById('connect-btn');
 const disconnectBtn= document.getElementById('disconnect-btn');
-const micBtn       = document.getElementById('mic-btn');
 const conversation = document.getElementById('conversation');
 const statusDot    = document.getElementById('status-dot');
 const statusText   = document.getElementById('status-text');
@@ -217,35 +215,12 @@ const vadStatus    = document.getElementById('vad-status');
 const setupError   = document.getElementById('setup-error');
 
 /* ── State ─────────────────────────────────────────────────────────────── */
-let ws             = null;
-let audioCtx       = null;
-let micStream      = null;
-let workletNode    = null;
-let micActive      = false;
-let partialEl      = null;   // current in-progress assistant bubble
-
-/* ── AudioWorklet processor (inlined as blob URL) ──────────────────────── */
-const WORKLET_CODE = `
-class PCM16Processor extends AudioWorkletProcessor {
-  process(inputs) {
-    const ch = inputs[0] && inputs[0][0];
-    if (!ch) return true;
-    const buf = new Int16Array(ch.length);
-    for (let i = 0; i < ch.length; i++) {
-      const s = Math.max(-1, Math.min(1, ch[i]));
-      buf[i] = s < 0 ? s * 32768 : s * 32767;
-    }
-    this.port.postMessage(buf.buffer, [buf.buffer]);
-    return true;
-  }
-}
-registerProcessor('pcm16-processor', PCM16Processor);
-`;
+let ws        = null;
+let partialEl = null;   // current in-progress assistant bubble
 
 /* ── Event wiring ──────────────────────────────────────────────────────── */
 connectBtn.addEventListener('click', connect);
 disconnectBtn.addEventListener('click', disconnect);
-micBtn.addEventListener('click', toggleMic);
 
 ['furhat-ip', 'openai-key'].forEach(id =>
   document.getElementById(id).addEventListener('keydown', e => e.key === 'Enter' && connect())
@@ -266,7 +241,6 @@ async function connect() {
   try {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     ws = new WebSocket(`${proto}://${location.host}/ws`);
-    ws.binaryType = 'arraybuffer';
 
     ws.onopen = () => {
       ws.send(JSON.stringify({
@@ -287,10 +261,9 @@ async function connect() {
       if (sessionPanel.style.display === 'none') return;
       addSysMsg('Connection closed.');
       setStatus('', 'Disconnected');
-      stopMic();
     };
 
-    // Switch to session view immediately so status messages are visible
+    // Switch to session view so status messages are visible immediately
     setupPanel.style.display = 'none';
     sessionPanel.style.display = 'flex';
     conversation.innerHTML = '';
@@ -304,7 +277,6 @@ async function connect() {
 
 function disconnect() {
   if (ws) { ws.close(); ws = null; }
-  stopMic();
   setTimeout(resetToSetup, 150);
 }
 
@@ -327,9 +299,7 @@ function handleServerMessage(evt) {
 
     case 'connected':
       setStatus('connected', 'Connected');
-      micBtn.disabled = false;
-      vadStatus.textContent = 'Ready – start speaking…';
-      startMic();
+      vadStatus.textContent = 'Furhat is speaking…';
       break;
 
     case 'vad_speech_started':
@@ -342,6 +312,11 @@ function handleServerMessage(evt) {
       setStatus('connected');
       break;
 
+    case 'furhat_speak_end':
+      vadStatus.textContent = 'Listening…';
+      setStatus('listening');
+      break;
+
     case 'transcript_delta':
       appendPartial(msg.role, msg.delta);
       break;
@@ -351,19 +326,9 @@ function handleServerMessage(evt) {
       addMessage(msg.role, msg.text);
       if (msg.role === 'assistant') {
         vadStatus.textContent = 'Furhat is speaking…';
-      }
-      break;
-
-    case 'furhat_event': {
-      const ename = msg.event?.event_name ?? '';
-      if (ename === 'response.speak.start') {
-        vadStatus.textContent = 'Furhat is speaking…';
-      } else if (ename === 'response.speak.end') {
-        vadStatus.textContent = micActive ? 'Listening…' : 'Microphone muted';
         setStatus('connected');
       }
       break;
-    }
 
     case 'error':
       commitPartial();
@@ -438,61 +403,6 @@ function esc(s) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/\n/g, '<br>');
-}
-
-/* ── Audio capture ─────────────────────────────────────────────────────── */
-async function startMic() {
-  try {
-    micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-
-    // Request 24 kHz so the browser resamples for us; OpenAI expects PCM16 @ 24 kHz
-    audioCtx = new AudioContext({ sampleRate: 24000 });
-
-    const blob    = new Blob([WORKLET_CODE], { type: 'application/javascript' });
-    const blobUrl = URL.createObjectURL(blob);
-    await audioCtx.audioWorklet.addModule(blobUrl);
-    URL.revokeObjectURL(blobUrl);
-
-    const source = audioCtx.createMediaStreamSource(micStream);
-    workletNode  = new AudioWorkletNode(audioCtx, 'pcm16-processor');
-
-    workletNode.port.onmessage = (e) => {
-      if (micActive && ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(e.data);   // raw Int16 PCM bytes
-      }
-    };
-
-    source.connect(workletNode);
-    // intentionally NOT connected to audioCtx.destination (no loopback)
-
-    micActive = true;
-    micBtn.classList.add('recording');
-    micBtn.title = 'Click to mute microphone';
-    vadStatus.textContent = 'Listening…';
-    setStatus('listening');
-
-  } catch (err) {
-    addErrMsg(`Microphone error: ${err.message}`);
-    vadStatus.textContent = 'Microphone unavailable';
-  }
-}
-
-function toggleMic() {
-  if (!audioCtx) return; // not yet initialised
-  micActive = !micActive;
-  micBtn.classList.toggle('recording', micActive);
-  micBtn.title = micActive ? 'Click to mute microphone' : 'Click to unmute microphone';
-  vadStatus.textContent = micActive ? 'Listening…' : 'Microphone muted';
-  setStatus(micActive ? 'listening' : 'connected');
-}
-
-function stopMic() {
-  micActive = false;
-  if (workletNode) { workletNode.disconnect(); workletNode = null; }
-  if (audioCtx)    { audioCtx.close();         audioCtx = null; }
-  if (micStream)   { micStream.getTracks().forEach(t => t.stop()); micStream = null; }
-  micBtn.disabled = true;
-  micBtn.classList.remove('recording');
 }
 </script>
 </body>
