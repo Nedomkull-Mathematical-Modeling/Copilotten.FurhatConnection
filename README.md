@@ -19,23 +19,23 @@ Browser (monitor UI)  ◄──── transcripts & status ────  FastAPI
 ## Installation
 
 ```bash
-pip install copilotten-furhat-bridge
+pip install furhat-bridge
 ```
 
 ## Quick start
 
 ```bash
 # Start the bridge server (binds to 0.0.0.0:8000 by default)
-copilotten-bridge
+furhat-bridge
 
 # Custom host/port
-copilotten-bridge --host 127.0.0.1 --port 9000
+furhat-bridge --host 127.0.0.1 --port 9000
 
 # Development mode with auto-reload
-copilotten-bridge --reload
+furhat-bridge --reload
 
 # Or with uvicorn directly
-uvicorn copilotten_furhat_bridge.server:app --reload
+uvicorn furhat_bridge.server:app --reload
 ```
 
 Then open `http://localhost:8000` in your browser, enter the Furhat IP address and your OpenAI API key, and click **Connect**.

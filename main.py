@@ -5,7 +5,7 @@ Run with:
     uvicorn main:app --reload
 
 Or use the installed CLI:
-    copilotten-bridge --reload
+    furhat-bridge --reload
 """
 
-from copilotten_furhat_bridge.server import app  # noqa: F401
+from furhat_bridge.server import app  # noqa: F401

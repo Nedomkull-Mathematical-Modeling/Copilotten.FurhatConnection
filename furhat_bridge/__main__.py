@@ -1,4 +1,4 @@
-"""Entry point for `python -m copilotten_furhat_bridge` and the `copilotten-bridge` script."""
+"""Entry point for `python -m furhat_bridge` and the `furhat-bridge` script."""
 
 import argparse
 
@@ -7,8 +7,8 @@ import uvicorn
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        prog="copilotten-bridge",
-        description="Start the Copilotten Furhat Bridge server.",
+        prog="furhat-bridge",
+        description="Start the Furhat Bridge server.",
     )
     parser.add_argument(
         "--host",
@@ -35,7 +35,7 @@ def main() -> None:
     args = parser.parse_args()
 
     uvicorn.run(
-        "copilotten_furhat_bridge.server:app",
+        "furhat_bridge.server:app",
         host=args.host,
         port=args.port,
         reload=args.reload,

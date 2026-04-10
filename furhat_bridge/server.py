@@ -1,6 +1,6 @@
 """
-Copilotten Furhat Bridge
-========================
+Furhat Bridge
+=============
 FastAPI WebSocket server that bridges:
   - A browser/frontend (monitor UI via WebSocket)
   - OpenAI Realtime API (speech-to-text + LLM + TTS via WebSocket)
@@ -16,9 +16,9 @@ Flow:
   7. Transcripts are forwarded to the browser UI
 
 Run with:
-    copilotten-bridge
+    furhat-bridge
   or:
-    uvicorn copilotten_furhat_bridge.server:app --reload
+    uvicorn furhat_bridge.server:app --reload
 """
 
 import asyncio
@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 
 _STATIC_DIR = Path(__file__).parent / "static"
 
-app = FastAPI(title="Copilotten Furhat Bridge")
+app = FastAPI(title="Furhat Bridge")
 
 app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
