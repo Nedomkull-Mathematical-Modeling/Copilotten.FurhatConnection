@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Copilotten – Furhat Bridge</title>
+  <style>
+    :root {
+      --bg:        #0f0f1a;
+      --surface:   #1c1c2e;
+      --border:    #2a2a3e;
+      --primary:   #7c6af7;
+      --primary-h: #9b8eff;
+      --text:      #e2e8f0;
+      --muted:     #8892a4;
+      --user-bg:   #1e3a5f;
+      --asst-bg:   #2a1e4f;
+      --green:     #22c55e;
+      --red:       #ef4444;
+      --amber:     #f59e0b;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1rem;
+    }
+
+    #app { width: 100%; max-width: 700px; }
+
+    /* ── Setup panel ─────────────────────────────────────────────────── */
+    #setup-panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 2.5rem;
+    }
+
+    .logo     { font-size: 2rem; font-weight: 700; color: var(--primary); }
+    .tagline  { color: var(--muted); margin-bottom: 2rem; font-size: 0.9rem; }
+
+    .field        { margin-bottom: 1.25rem; }
+    .field label  { display: block; font-size: 0.8rem; color: var(--muted); margin-bottom: 0.4rem; }
+    .field input  {
+      width: 100%; padding: 0.75rem 1rem;
+      background: var(--bg); border: 1px solid var(--border);
+      border-radius: 8px; color: var(--text); font-size: 1rem;
+      transition: border-color .2s;
+    }
+    .field input:focus { outline: none; border-color: var(--primary); }
+
+    .btn {
+      width: 100%; padding: 0.75rem 1.5rem;
+      background: var(--primary); color: #fff;
+      border: none; border-radius: 8px;
+      font-size: 1rem; font-weight: 600;
+      cursor: pointer; transition: background .2s;
+    }
+    .btn:hover    { background: var(--primary-h); }
+    .btn:disabled { opacity: .5; cursor: not-allowed; }
+
+    #setup-error {
+      color: var(--red); font-size: 0.85rem;
+      margin-bottom: 1rem; display: none;
+    }
+
+    /* ── Session panel ───────────────────────────────────────────────── */
+    #session-panel {
+      display: none;
+      flex-direction: column;
+      height: 92vh;
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      overflow: hidden;
+    }
+
+    #header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: .75rem 1.25rem;
+      background: var(--surface); border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    #header .logo { font-size: 1.2rem; }
+
+    .status-row { display: flex; align-items: center; gap: .5rem; }
+    #status-text { font-size: .82rem; color: var(--muted); }
+
+    #disconnect-btn {
+      background: transparent; border: 1px solid var(--border);
+      color: var(--muted); padding: .35rem .7rem;
+      border-radius: 6px; cursor: pointer; font-size: .8rem;
+      transition: border-color .2s, color .2s;
+    }
+    #disconnect-btn:hover { border-color: var(--red); color: var(--red); }
+
+    /* Status dot */
+    .dot {
+      width: 9px; height: 9px; border-radius: 50%;
+      background: var(--muted); flex-shrink: 0;
+    }
+    .dot.connected { background: var(--green); }
+    .dot.error     { background: var(--red); }
+    .dot.listening { background: var(--amber); animation: pulse 1.2s infinite; }
+
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+
+    /* Conversation */
+    #conversation {
+      flex: 1; overflow-y: auto;
+      padding: 1rem; display: flex; flex-direction: column; gap: .75rem;
+      background: var(--bg);
+    }
+    #conversation::-webkit-scrollbar       { width: 5px; }
+    #conversation::-webkit-scrollbar-track { background: transparent; }
+    #conversation::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+    .msg {
+      max-width: 78%; padding: .65rem 1rem;
+      border-radius: 12px; line-height: 1.55; font-size: .93rem;
+    }
+    .msg.user      { background: var(--user-bg); align-self: flex-end; }
+    .msg.assistant { background: var(--asst-bg); align-self: flex-start; }
+    .msg .label    { font-size: .68rem; color: var(--muted); margin-bottom: .2rem; }
+    .msg.partial   { opacity: .65; font-style: italic; }
+
+    .sys-msg   { color: var(--muted); font-size: .78rem; text-align: center; }
+    .err-msg   { color: var(--red);   font-size: .82rem; text-align: center; }
+
+    /* Controls bar */
+    #controls {
+      display: flex; align-items: center; gap: 1rem;
+      padding: .85rem 1.25rem;
+      background: var(--surface); border-top: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    #mic-btn {
+      width: 52px; height: 52px; flex-shrink: 0;
+      border-radius: 50%; background: var(--primary);
+      border: none; font-size: 1.35rem;
+      cursor: pointer; display: flex; align-items: center; justify-content: center;
+      transition: background .2s, transform .15s;
+    }
+    #mic-btn:hover             { background: var(--primary-h); transform: scale(1.06); }
+    #mic-btn.recording         { background: var(--red); animation: pulse 1.2s infinite; }
+    #mic-btn:disabled          { opacity: .4; cursor: not-allowed; animation: none; }
+
+    #controls-info p           { font-size: .82rem; color: var(--muted); }
+    #vad-status                { font-size: .82rem; color: var(--text); }
+  </style>
+</head>
+<body>
+<div id="app">
+
+  <!-- ── Setup ─────────────────────────────────────────────────────── -->
+  <div id="setup-panel">
+    <div class="logo">Copilotten</div>
+    <div class="tagline">Furhat ↔ OpenAI Realtime Bridge</div>
+
+    <div class="field">
+      <label for="furhat-ip">Furhat IP Address</label>
+      <input type="text" id="furhat-ip" placeholder="192.168.1.59" autocomplete="off" />
+    </div>
+    <div class="field">
+      <label for="openai-key">OpenAI API Key</label>
+      <input type="password" id="openai-key" placeholder="sk-…" autocomplete="off" />
+    </div>
+
+    <div id="setup-error"></div>
+    <button class="btn" id="connect-btn">Connect</button>
+  </div>
+
+  <!-- ── Session ───────────────────────────────────────────────────── -->
+  <div id="session-panel">
+    <div id="header">
+      <div class="logo">Copilotten</div>
+      <div class="status-row">
+        <div class="dot" id="status-dot"></div>
+        <span id="status-text">Connecting…</span>
+        <button id="disconnect-btn">Disconnect</button>
+      </div>
+    </div>
+
+    <div id="conversation"></div>
+
+    <div id="controls">
+      <div id="controls-info">
+        <div id="vad-status">Waiting for connection…</div>
+        <p>Audio is captured by the Furhat robot's microphone.</p>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+'use strict';
+
+/* ── DOM refs ──────────────────────────────────────────────────────────── */
+const setupPanel   = document.getElementById('setup-panel');
+const sessionPanel = document.getElementById('session-panel');
+const connectBtn   = document.getElementById('connect-btn');
+const disconnectBtn= document.getElementById('disconnect-btn');
+const conversation = document.getElementById('conversation');
+const statusDot    = document.getElementById('status-dot');
+const statusText   = document.getElementById('status-text');
+const vadStatus    = document.getElementById('vad-status');
+const setupError   = document.getElementById('setup-error');
+
+/* ── State ─────────────────────────────────────────────────────────────── */
+let ws        = null;
+let partialEl = null;   // current in-progress assistant bubble
+
+/* ── Event wiring ──────────────────────────────────────────────────────── */
+connectBtn.addEventListener('click', connect);
+disconnectBtn.addEventListener('click', disconnect);
+
+['furhat-ip', 'openai-key'].forEach(id =>
+  document.getElementById(id).addEventListener('keydown', e => e.key === 'Enter' && connect())
+);
+
+/* ── Connection ────────────────────────────────────────────────────────── */
+async function connect() {
+  const furhatIp  = document.getElementById('furhat-ip').value.trim();
+  const openaiKey = document.getElementById('openai-key').value.trim();
+
+  if (!furhatIp)  return showSetupError('Please enter the Furhat IP address.');
+  if (!openaiKey) return showSetupError('Please enter your OpenAI API key.');
+
+  setupError.style.display = 'none';
+  connectBtn.disabled = true;
+  connectBtn.textContent = 'Connecting…';
+
+  try {
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    ws = new WebSocket(`${proto}://${location.host}/ws`);
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify({
+        type: 'config',
+        furhat_ip: furhatIp,
+        openai_api_key: openaiKey,
+      }));
+    };
+
+    ws.onmessage = handleServerMessage;
+
+    ws.onerror = () => {
+      showSetupError('WebSocket error – is the server running?');
+      resetToSetup();
+    };
+
+    ws.onclose = () => {
+      if (sessionPanel.style.display === 'none') return;
+      addSysMsg('Connection closed.');
+      setStatus('', 'Disconnected');
+    };
+
+    // Switch to session view so status messages are visible immediately
+    setupPanel.style.display = 'none';
+    sessionPanel.style.display = 'flex';
+    conversation.innerHTML = '';
+    setStatus('', 'Connecting…');
+
+  } catch (err) {
+    showSetupError(`Error: ${err.message}`);
+    resetToSetup();
+  }
+}
+
+function disconnect() {
+  if (ws) { ws.close(); ws = null; }
+  setTimeout(resetToSetup, 150);
+}
+
+function resetToSetup() {
+  connectBtn.disabled = false;
+  connectBtn.textContent = 'Connect';
+  setupPanel.style.display = 'block';
+  sessionPanel.style.display = 'none';
+}
+
+/* ── Server message handling ───────────────────────────────────────────── */
+function handleServerMessage(evt) {
+  const msg = JSON.parse(evt.data);
+
+  switch (msg.type) {
+    case 'status':
+      addSysMsg(msg.message);
+      setStatus('', msg.message);
+      break;
+
+    case 'connected':
+      setStatus('connected', 'Connected');
+      vadStatus.textContent = 'Furhat is speaking…';
+      break;
+
+    case 'vad_speech_started':
+      vadStatus.textContent = 'Listening…';
+      setStatus('listening');
+      break;
+
+    case 'vad_speech_stopped':
+      vadStatus.textContent = 'Processing…';
+      setStatus('connected');
+      break;
+
+    case 'furhat_speak_end':
+      vadStatus.textContent = 'Listening…';
+      setStatus('listening');
+      break;
+
+    case 'transcript_delta':
+      appendPartial(msg.role, msg.delta);
+      break;
+
+    case 'transcript':
+      commitPartial();
+      addMessage(msg.role, msg.text);
+      if (msg.role === 'assistant') {
+        vadStatus.textContent = 'Furhat is speaking…';
+        setStatus('connected');
+      }
+      break;
+
+    case 'error':
+      commitPartial();
+      addErrMsg(msg.message);
+      setStatus('error', 'Error');
+      break;
+  }
+}
+
+/* ── UI helpers ────────────────────────────────────────────────────────── */
+function setStatus(state, text) {
+  statusDot.className = 'dot' + (state ? ' ' + state : '');
+  if (text !== undefined) statusText.textContent = text;
+}
+
+function addMessage(role, text) {
+  const el = document.createElement('div');
+  el.className = `msg ${role}`;
+  el.innerHTML = `<div class="label">${role === 'user' ? 'You' : 'Copilotten'}</div>${esc(text)}`;
+  conversation.appendChild(el);
+  scrollBottom();
+}
+
+function appendPartial(role, delta) {
+  if (!partialEl || partialEl.dataset.role !== role) {
+    commitPartial();
+    partialEl = document.createElement('div');
+    partialEl.className = `msg ${role} partial`;
+    partialEl.dataset.role = role;
+    partialEl.innerHTML = `<div class="label">${role === 'user' ? 'You' : 'Copilotten'}</div><span></span>`;
+    conversation.appendChild(partialEl);
+  }
+  partialEl.querySelector('span').textContent += delta;
+  scrollBottom();
+}
+
+function commitPartial() {
+  if (partialEl) {
+    partialEl.classList.remove('partial');
+    partialEl = null;
+  }
+}
+
+function addSysMsg(text) {
+  const el = document.createElement('div');
+  el.className = 'sys-msg';
+  el.textContent = text;
+  conversation.appendChild(el);
+  scrollBottom();
+}
+
+function addErrMsg(text) {
+  const el = document.createElement('div');
+  el.className = 'err-msg';
+  el.textContent = `⚠ ${text}`;
+  conversation.appendChild(el);
+  scrollBottom();
+}
+
+function scrollBottom() {
+  conversation.scrollTop = conversation.scrollHeight;
+}
+
+function showSetupError(msg) {
+  setupError.textContent = msg;
+  setupError.style.display = 'block';
+}
+
+function esc(s) {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/\n/g, '<br>');
+}
+</script>
+</body>
+</html>

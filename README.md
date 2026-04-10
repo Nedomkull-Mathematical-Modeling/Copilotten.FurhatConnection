@@ -16,17 +16,49 @@ Furhat microphone (PCM16 audio @ 24 kHz)
 Browser (monitor UI)  ◄──── transcripts & status ────  FastAPI /ws
 ```
 
+## Installation
+
+```bash
+pip install copilotten-furhat-bridge
+```
+
 ## Quick start
 
 ```bash
-# 1. Install dependencies
+# Start the bridge server (binds to 0.0.0.0:8000 by default)
+copilotten-bridge
+
+# Custom host/port
+copilotten-bridge --host 127.0.0.1 --port 9000
+
+# Development mode with auto-reload
+copilotten-bridge --reload
+
+# Or with uvicorn directly
+uvicorn copilotten_furhat_bridge.server:app --reload
+```
+
+Then open `http://localhost:8000` in your browser, enter the Furhat IP address and your OpenAI API key, and click **Connect**.
+
+## Development (from source)
+
+```bash
+# Clone and install in editable mode
+git clone https://github.com/Nedomkull-Mathematical-Modeling/Copilotten.FurhatConnection
+cd Copilotten.FurhatConnection
+pip install -e .
+
+# Or install only the dependencies without packaging
 pip install -r requirements.txt
-
-# 2. Start the server
 uvicorn main:app --reload
+```
 
-# 3. Open http://localhost:8000 in your browser
-#    Enter the Furhat IP address and your OpenAI API key, then click Connect.
+## Publishing to PyPI
+
+```bash
+pip install build twine
+python -m build
+twine upload dist/*
 ```
 
 ## How it works

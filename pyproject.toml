@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "copilotten-furhat-bridge"
+version = "0.1.0"
+description = "FastAPI WebSocket bridge between a Furhat robot and the OpenAI Realtime API"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+keywords = ["furhat", "openai", "realtime", "robot", "websocket", "fastapi"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Web Environment",
+    "Framework :: FastAPI",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Internet :: WWW/HTTP :: HTTP Servers",
+    "Topic :: Scientific/Engineering :: Human Machine Interfaces",
+]
+dependencies = [
+    "fastapi>=0.109.0",
+    "uvicorn[standard]>=0.27.0",
+    "websockets>=12.0",
+    "furhat-realtime-api>=0.1.3",
+]
+
+[project.urls]
+Homepage = "https://github.com/Nedomkull-Mathematical-Modeling/Copilotten.FurhatConnection"
+"Bug Tracker" = "https://github.com/Nedomkull-Mathematical-Modeling/Copilotten.FurhatConnection/issues"
+
+[project.scripts]
+copilotten-bridge = "copilotten_furhat_bridge.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["copilotten_furhat_bridge*"]
+
+[tool.setuptools.package-data]
+copilotten_furhat_bridge = ["static/*"]
