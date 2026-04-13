@@ -1,6 +1,7 @@
 # Copilotten.FurhatConnection
 
 [![CI](https://github.com/Nedomkull-Mathematical-Modeling/Copilotten.FurhatConnection/actions/workflows/ci.yml/badge.svg)](https://github.com/Nedomkull-Mathematical-Modeling/Copilotten.FurhatConnection/actions/workflows/ci.yml)
+[![Publish to PyPI](https://github.com/Nedomkull-Mathematical-Modeling/Copilotten.FurhatConnection/actions/workflows/publish.yml/badge.svg)](https://github.com/Nedomkull-Mathematical-Modeling/Copilotten.FurhatConnection/actions/workflows/publish.yml)
 
 A FastAPI-based WebSocket bridge between a **Furhat robot** and the **OpenAI Realtime API**.
 
