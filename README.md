@@ -3,38 +3,73 @@
 A FastAPI-based WebSocket bridge between a **Furhat robot** and the **OpenAI Realtime API**.
 
 ```
-Browser mic (PCM16 audio)
+Furhat microphone (PCM16 audio @ 24 kHz)
         │
         ▼
   FastAPI /ws  ──────► OpenAI Realtime API (gpt-4o-realtime-preview)
-        │                      │ response.done → text
+        │                      │ response.audio.delta → PCM16 audio
         │◄─────────────────────┘
-        │ request.speak.text
+        │ request_speak_audio_start/data/end
         ▼
-  Furhat robot (ws://<ip>:9000/v1/events)
+  Furhat robot (furhat-realtime-api)
+
+Browser (monitor UI)  ◄──── transcripts & status ────  FastAPI /ws
+```
+
+## Installation
+
+```bash
+pip install furhat-bridge
 ```
 
 ## Quick start
 
 ```bash
-# 1. Install dependencies
+# Start the bridge server (binds to 0.0.0.0:8000 by default)
+furhat-bridge
+
+# Custom host/port
+furhat-bridge --host 127.0.0.1 --port 9000
+
+# Development mode with auto-reload
+furhat-bridge --reload
+
+# Or with uvicorn directly
+uvicorn furhat_bridge.server:app --reload
+```
+
+Then open `http://localhost:8000` in your browser, enter the Furhat IP address and your OpenAI API key, and click **Connect**.
+
+## Development (from source)
+
+```bash
+# Clone and install in editable mode
+git clone https://github.com/Nedomkull-Mathematical-Modeling/Copilotten.FurhatConnection
+cd Copilotten.FurhatConnection
+pip install -e .
+
+# Or install only the dependencies without packaging
 pip install -r requirements.txt
-
-# 2. Start the server
 uvicorn main:app --reload
+```
 
-# 3. Open http://localhost:8000 in your browser
-#    Enter the Furhat IP address and your OpenAI API key, then click Connect.
+## Publishing to PyPI
+
+```bash
+pip install build twine
+python -m build
+twine upload dist/*
 ```
 
 ## How it works
 
 1. The browser opens a WebSocket to `/ws` and sends a `config` message with the Furhat IP and OpenAI API key.
-2. The server opens WebSocket connections to both the Furhat robot (`ws://<ip>:9000/v1/events`) and the OpenAI Realtime API.
-3. Microphone audio (PCM16, 24 kHz, mono) is captured in the browser via the Web Audio API and streamed to the server, which forwards it to OpenAI using `input_audio_buffer.append`.
-4. OpenAI's server-side VAD detects speech boundaries automatically.
-5. When OpenAI emits `response.done`, the server extracts the assistant's text and sends `request.speak.text` to the Furhat robot so it speaks the response aloud.
-6. Transcripts (both user speech and assistant replies) are displayed in the browser in real time.
+2. The server connects to the Furhat robot using [`furhat-realtime-api`](https://pypi.org/project/furhat-realtime-api/) (`AsyncFurhatClient`) and to the OpenAI Realtime API via WebSocket.
+3. On `session.created`, the server configures the OpenAI session (audio in/out, server-side VAD, Whisper transcription) and triggers an initial greeting from Copilotten.
+4. When OpenAI is generating a response, the Furhat microphone is paused. OpenAI's audio deltas are streamed directly to the Furhat robot for real-time lipsync playback.
+5. When Furhat finishes speaking (`response.speak.end`), the microphone resumes and the user can speak. The Furhat microphone audio (PCM16, 24 kHz, mono) is forwarded to OpenAI using `input_audio_buffer.append`.
+6. OpenAI's server-side VAD detects speech boundaries automatically.
+7. Transcripts (both user speech via Whisper and assistant replies) are displayed in the browser in real time.
 
 ## Requirements
 
